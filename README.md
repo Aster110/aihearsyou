@@ -22,12 +22,6 @@ First, run:
 
 ```bash
 npm install
-# or
-yarn install
-# or
-pnpm install
-# or
-bun install
 ```
 
 Then run the development server (using the package manager of your choice):
