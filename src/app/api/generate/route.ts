@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 interface RequestBody {
   text: string;
+  stream?: boolean;
 }
 
 interface ApiResponse {
@@ -11,13 +12,17 @@ interface ApiResponse {
   model: string;
   choices: Array<{
     index: number;
-    message: {
+    message?: {
       role: string;
       content: string;
     };
-    finish_reason: string;
+    delta?: {
+      role?: string;
+      content?: string;
+    };
+    finish_reason: string | null;
   }>;
-  usage: {
+  usage?: {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
@@ -30,7 +35,7 @@ const SYSTEM_PROMPT = `你是一个朋友圈文案回应助手，文风参考《
 
 export async function POST(request: Request) {
   try {
-    const { text } = await request.json() as RequestBody;
+    const { text, stream = false } = await request.json() as RequestBody;
 
     const payload = {
       model: "gpt-4o",
@@ -46,7 +51,7 @@ export async function POST(request: Request) {
       ],
       max_tokens: 1688,
       temperature: 0.5,
-      stream: false
+      stream
     };
 
     const response = await fetch('https://ismaque.org/v1/chat/completions', {
@@ -63,15 +68,53 @@ export async function POST(request: Request) {
       throw new Error(`API request failed with status ${response.status}`);
     }
 
-    const data = await response.json() as ApiResponse;
-    
-    // 提取AI的回复内容
-    const aiResponse = data.choices[0]?.message?.content || '抱歉，我无法生成回应';
+    if (stream) {
+      // 设置流式响应的headers
+      const headers = new Headers();
+      headers.set('Content-Type', 'text/event-stream');
+      headers.set('Cache-Control', 'no-cache');
+      headers.set('Connection', 'keep-alive');
 
-    return NextResponse.json({
-      text: aiResponse,
-      usage: data.usage
-    });
+      // 创建流式响应
+      const stream = new ReadableStream({
+        async start(controller) {
+          const reader = response.body?.getReader();
+          if (!reader) {
+            controller.close();
+            return;
+          }
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                controller.close();
+                break;
+              }
+              // 将数据块转换为文本
+              const chunk = new TextDecoder().decode(value);
+              controller.enqueue(new TextEncoder().encode(chunk));
+            }
+          } catch (error) {
+            console.error('Stream error:', error);
+            controller.error(error);
+          } finally {
+            reader.releaseLock();
+          }
+        },
+      });
+
+      return new Response(stream, { headers });
+    } else {
+      // 非流式响应
+      const data = await response.json() as ApiResponse;
+      const aiResponse = data.choices[0]?.message?.content || '抱歉，我无法生成回应';
+
+      return NextResponse.json({
+        text: aiResponse,
+        usage: data.usage
+      });
+    }
   } catch (error) {
     console.error('Error:', error);
     return NextResponse.json(
